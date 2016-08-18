@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>rpc4js</title>
+    <script src="lodash.js"></script>
+    <script src="node-uuid.js"></script>
+    <script src="q.js"></script>
+    <script src="rpc4js.js"></script>
+    <script src="socket.io-client.js"></script>
+    <script>
+        var ws = io(`ws://${window.location.host}`, {
+            autoConnect: false
+        })
+        rpc4js.bind(ws)
+        ws.connect()
+        rpc4js.connect('test', {
+            A: 'A',
+            FUNC: function (rpc, msg) {
+                console.log(msg)
+            }
+        }, function (remote) {
+            console.log(remote.a)
+            remote.func('hello server!')
+            remote.func_with_callback(function (rpc, msg) {
+                console.log('>>>' + msg)
+                // rpc.release = false
+                rpc.clear = true
+            }, function (rpc, msg) {
+                console.log('+++' + msg)
+            })
+        })
+    </script>
+</head>
+<body>
+
+</body>
+</html>

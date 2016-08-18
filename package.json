@@ -1,0 +1,44 @@
+{
+  "name": "rpc4js",
+  "version": "0.0.1",
+  "description": "rpc for js",
+  "main": "dist/rpc4js.js",
+  "jsnext:main": "src/index.js",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "node build/build.js",
+    "release": "bash build/release.sh"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/u10/rpc4js.git"
+  },
+  "author": "vaniship",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/u10/rpc4js/issues"
+  },
+  "homepage": "https://github.com/u10/rpc4js#readme",
+  "dependencies": {
+    "lodash": "^4.15.0",
+    "node-uuid": "^1.4.7",
+    "q": "1.4.1"
+  },
+  "devDependencies": {
+    "express": "^4.14.0",
+    "socket.io": "1.4.8",
+    "socket.io-client": "^1.4.8",
+    "rollup": "^0.21.0",
+    "rollup-plugin-babel": "^1.0.0",
+    "eslint": "^2.2.0",
+    "uglify-js": "^2.6.2"
+  },
+  "jspm": {
+    "main": "src/index.js",
+    "registry": "npm",
+    "format": "esm"
+  }
+}
