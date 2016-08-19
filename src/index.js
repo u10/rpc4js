@@ -14,8 +14,8 @@ function mapping(obj, funcIndex, funcMap, opts, path, context) {
         }
         funcMap[id] = (function (context) {
             return function () {
-                let rpc = _.extend({}, opts, {clear: false})
-                let args = 1 <= arguments.length ? slice.call(arguments, 0) : []
+                const rpc = _.extend({}, opts, {clear: false})
+                const args = 1 <= arguments.length ? slice.call(arguments, 0) : []
                 const result = obj.apply(context, [rpc].concat(args))
                 if (rpc.clear) {
                     if (opts.clear) {
@@ -65,15 +65,14 @@ function proxy(ws, obj, funcIndex, funcMap) {
         method = v[v.length - 1]
         o[v[v.length - 2]] = (function (method) {
             return function () {
-                let args = 1 <= arguments.length ? slice.call(arguments, 0) : []
+                const args = 1 <= arguments.length ? slice.call(arguments, 0) : []
                 const deferred = Q.defer()
                 const funcIndex = []
                 const id = uuid.v4()
-                args = mapping(args, funcIndex, funcMap, {release: true, clear: []})
                 ws.emit('rpc-call', {
                     id: id,
                     method: method,
-                    args: args,
+                    args: mapping(args, funcIndex, funcMap, {release: true, clear: []}),
                     funcIndex: funcIndex
                 })
                 const timer = setTimeout(function () {
@@ -103,12 +102,18 @@ function mkRpcCallCallback(ws, funcMap) {
     return function (req) {
         const func = funcMap[req.method]
         if (func) {
-            const argsProxy = proxy(ws, req.args, req.funcIndex, funcMap)
-            const result = func.apply(null, argsProxy)
-            ws.emit('rpc-return', {
-                id: req.id,
-                result: result
-            })
+            try {
+                const result = func.apply(null, proxy(ws, req.args, req.funcIndex, funcMap))
+                ws.emit('rpc-return', {
+                    id: req.id,
+                    result: result
+                })
+            } catch (e) {
+                ws.emit('rpc-return', {
+                    id: req.id,
+                    error: e
+                })
+            }
         } else {
             ws.emit('rpc-return', {
                 id: req.id,
@@ -129,15 +134,24 @@ export default {
             let funcMap = {}
             let funcIndex = []
             socket.on('rpc-connect', function (req) {
-                const clientProxy = proxy(socket, req.client, req.funcIndex, funcMap)
-                let local = localConstructors[req.name](clientProxy)
-                local = mapping(local, funcIndex, funcMap)
-                socket.on('rpc-call', mkRpcCallCallback(socket, funcMap))
-                socket.emit('rpc-connect', {
-                    name: req.name,
-                    remote: local,
-                    funcIndex: funcIndex
-                })
+                const constructor = localConstructors[req.name]
+                if (constructor) {
+                    const local = constructor(proxy(socket, req.client, req.funcIndex, funcMap))
+                    socket.on('rpc-call', mkRpcCallCallback(socket, funcMap))
+                    socket.emit('rpc-connect', {
+                        id: req.id,
+                        name: req.name,
+                        remote: mapping(local, funcIndex, funcMap),
+                        funcIndex: funcIndex
+                    })
+                } else {
+                    socket.emit('rpc-connect', {
+                        id: req.id,
+                        name: req.name,
+                        error: 'object not found'
+                    })
+                }
+
             }).on('disconnect', function () {
                 funcMap = undefined
                 funcIndex = undefined
@@ -148,26 +162,43 @@ export default {
         this.ws = ws
         return this
     },
-    connect: function (name, local, callback) {
+    connect: function (name, local) {
+        const deferred = Q.defer()
         const ws = this.ws
-        const funcMap = {}
-        const funcIndex = []
-        const client = mapping(local, funcIndex, funcMap)
+        let funcIndex = []
+        let funcMap = {}
+        function release() {
+            clearTimeout(timer)
+            ws.removeListener('rpc-connect', rpcConnectCallback)
+            funcMap = undefined
+            funcIndex = undefined
+        }
+        const timer = setTimeout(function () {
+            release()
+            deferred.reject('timeout')
+        }, 5000)
+        const id = uuid.v4()
         ws.emit('rpc-connect', {
+            id : id,
             name: name,
-            client: client,
+            client: mapping(local, funcIndex, funcMap),
             funcIndex: funcIndex
         })
         const rpcConnectCallback = function (res) {
-            var remoteProxy
-            if (res.name === name) {
-                ws.removeListener('rpc-connect', rpcConnectCallback)
-                ws.on('rpc-call', mkRpcCallCallback(ws, funcMap))
-                remoteProxy = proxy(ws, res.remote, res.funcIndex, funcMap)
-                callback(remoteProxy)
+            if (res.id === id) {
+                if (res.error) {
+                    release()
+                    deferred.reject(res.error)
+                } else {
+                    clearTimeout(timer)
+                    ws.removeListener('rpc-connect', rpcConnectCallback)
+                    ws.on('rpc-call', mkRpcCallCallback(ws, funcMap))
+                    deferred.resolve(proxy(ws, res.remote, res.funcIndex, funcMap))
+                }
             }
         }
         ws.on('rpc-connect', rpcConnectCallback)
+        return deferred.promise
     },
     destroy: function () {
         var ws

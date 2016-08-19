@@ -107,11 +107,10 @@
                     var deferred = Q.defer();
                     var funcIndex = [];
                     var id = uuid.v4();
-                    args = mapping(args, funcIndex, funcMap, { release: true, clear: [] });
                     ws.emit('rpc-call', {
                         id: id,
                         method: method,
-                        args: args,
+                        args: mapping(args, funcIndex, funcMap, { release: true, clear: [] }),
                         funcIndex: funcIndex
                     });
                     var timer = setTimeout(function () {
@@ -141,12 +140,18 @@
         return function (req) {
             var func = funcMap[req.method];
             if (func) {
-                var argsProxy = proxy(ws, req.args, req.funcIndex, funcMap);
-                var result = func.apply(null, argsProxy);
-                ws.emit('rpc-return', {
-                    id: req.id,
-                    result: result
-                });
+                try {
+                    var result = func.apply(null, proxy(ws, req.args, req.funcIndex, funcMap));
+                    ws.emit('rpc-return', {
+                        id: req.id,
+                        result: result
+                    });
+                } catch (e) {
+                    ws.emit('rpc-return', {
+                        id: req.id,
+                        error: e
+                    });
+                }
             } else {
                 ws.emit('rpc-return', {
                     id: req.id,
@@ -167,15 +172,23 @@
                 var funcMap = {};
                 var funcIndex = [];
                 socket.on('rpc-connect', function (req) {
-                    var clientProxy = proxy(socket, req.client, req.funcIndex, funcMap);
-                    var local = localConstructors[req.name](clientProxy);
-                    local = mapping(local, funcIndex, funcMap);
-                    socket.on('rpc-call', mkRpcCallCallback(socket, funcMap));
-                    socket.emit('rpc-connect', {
-                        name: req.name,
-                        remote: local,
-                        funcIndex: funcIndex
-                    });
+                    var constructor = localConstructors[req.name];
+                    if (constructor) {
+                        var local = constructor(proxy(socket, req.client, req.funcIndex, funcMap));
+                        socket.on('rpc-call', mkRpcCallCallback(socket, funcMap));
+                        socket.emit('rpc-connect', {
+                            id: req.id,
+                            name: req.name,
+                            remote: mapping(local, funcIndex, funcMap),
+                            funcIndex: funcIndex
+                        });
+                    } else {
+                        socket.emit('rpc-connect', {
+                            id: req.id,
+                            name: req.name,
+                            error: 'object not found'
+                        });
+                    }
                 }).on('disconnect', function () {
                     funcMap = undefined;
                     funcIndex = undefined;
@@ -186,26 +199,43 @@
             this.ws = ws;
             return this;
         },
-        connect: function connect(name, local, callback) {
+        connect: function connect(name, local) {
+            var deferred = Q.defer();
             var ws = this.ws;
-            var funcMap = {};
             var funcIndex = [];
-            var client = mapping(local, funcIndex, funcMap);
+            var funcMap = {};
+            function release() {
+                clearTimeout(timer);
+                ws.removeListener('rpc-connect', rpcConnectCallback);
+                funcMap = undefined;
+                funcIndex = undefined;
+            }
+            var timer = setTimeout(function () {
+                release();
+                deferred.reject('timeout');
+            }, 5000);
+            var id = uuid.v4();
             ws.emit('rpc-connect', {
+                id: id,
                 name: name,
-                client: client,
+                client: mapping(local, funcIndex, funcMap),
                 funcIndex: funcIndex
             });
             var rpcConnectCallback = function rpcConnectCallback(res) {
-                var remoteProxy;
-                if (res.name === name) {
-                    ws.removeListener('rpc-connect', rpcConnectCallback);
-                    ws.on('rpc-call', mkRpcCallCallback(ws, funcMap));
-                    remoteProxy = proxy(ws, res.remote, res.funcIndex, funcMap);
-                    callback(remoteProxy);
+                if (res.id === id) {
+                    if (res.error) {
+                        release();
+                        deferred.reject(res.error);
+                    } else {
+                        clearTimeout(timer);
+                        ws.removeListener('rpc-connect', rpcConnectCallback);
+                        ws.on('rpc-call', mkRpcCallCallback(ws, funcMap));
+                        deferred.resolve(proxy(ws, res.remote, res.funcIndex, funcMap));
+                    }
                 }
             };
             ws.on('rpc-connect', rpcConnectCallback);
+            return deferred.promise;
         },
         destroy: function destroy() {
             var ws;
