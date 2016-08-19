@@ -15,9 +15,10 @@ rpc4js
                 console.log(msg)
                 client.FUNC('echo ' + msg)
             },
-            func_with_callback: function (rpc, clientCallback, f2) {
-                clientCallback('Msg from server!')
-                clientCallback('Msg from server!')
+            func_with_callback: function (rpc, cb001, f2) {
+                cb001(function (rpc, cb003) {
+                    cb003('11111111111')
+                })
                 f2('>>>>>>>>>>').fail(function (error) {
                     console.log('error: ' + error)
                 })

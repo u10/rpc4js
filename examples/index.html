@@ -9,7 +9,7 @@
     <script src="rpc4js.js"></script>
     <script src="socket.io-client.js"></script>
     <script>
-        var ws = io(`ws://${window.location.host}`, {
+        var ws = io('ws://' + window.location.host, {
             autoConnect: false
         })
         rpc4js.bind(ws)
@@ -19,13 +19,15 @@
             FUNC: function (rpc, msg) {
                 console.log(msg)
             }
-        }, function (remote) {
+        }).then(function (remote) {
             console.log(remote.a)
             remote.func('hello server!')
-            remote.func_with_callback(function (rpc, msg) {
-                console.log('>>>' + msg)
+            remote.func_with_callback(function (rpc, cb002) {
+                cb002(function (rpc, msg) {
+                    console.log('@@@@@@@@@@++++++' + msg)
+                })
                 // rpc.release = false
-                rpc.clear = true
+                // rpc.clear = true
             }, function (rpc, msg) {
                 console.log('+++' + msg)
             })
