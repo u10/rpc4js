@@ -18,9 +18,10 @@ function mapping(obj, funcIndex, funcMap, opts, path, context) {
                 const args = 1 <= arguments.length ? slice.call(arguments, 0) : []
                 const result = obj.apply(context, [rpc].concat(args))
                 if (rpc.clear) {
-                    if (opts.clear) {
-                        for (let v of opts.clear) {
-                            delete funcMap[v]
+                    const clear = opts.clear
+                    if (clear) {
+                        for (let index in clear) {
+                            delete funcMap[clear[index]]
                         }
                     }
                 } else {
@@ -67,7 +68,7 @@ function proxy(ws, obj, funcIndex, funcMap) {
             return function () {
                 const args = 1 <= arguments.length ? slice.call(arguments, 0) : []
                 const deferred = Q.defer()
-                const funcIndex = []
+                let funcIndex = []
                 const id = uuid.v4()
                 ws.emit('rpc-call', {
                     id: id,
@@ -91,7 +92,15 @@ function proxy(ws, obj, funcIndex, funcMap) {
                     }
                 }
                 ws.on('rpc-return', callback)
-                return deferred.promise
+                const promise = deferred.promise
+                promise.fail(function () {
+                    for (let index in funcIndex) {
+                        let key = funcIndex[index]
+                        delete funcMap[key[key.length - 1]]
+                    }
+                    funcIndex = undefined
+                })
+                return promise
             }
         })(method)
     }
@@ -179,7 +188,7 @@ export default {
         }, 5000)
         const id = uuid.v4()
         ws.emit('rpc-connect', {
-            id : id,
+            id: id,
             name: name,
             client: mapping(local, funcIndex, funcMap),
             funcIndex: funcIndex
