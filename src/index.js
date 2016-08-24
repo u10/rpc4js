@@ -5,40 +5,59 @@ import uuid from 'node-uuid'
 const slice = [].slice
 const localConstructors = {}
 
-function mapping(obj, funcIndex, funcMap, opts, path, context) {
+function release(id, funcMap) {
+    if (funcMap[id]) {
+        for (let index in funcMap[id]) {
+            delete funcMap[funcMap[id][index]]
+        }
+        funcMap[id] = false
+        setTimeout(function () {
+            delete funcMap[id]    
+        },100)
+    }
+}
+
+function clear(funcIndex, funcMap) {
+    for (let index in funcIndex) {
+        let key = funcIndex[index]
+        delete funcMap[key[key.length - 1]]
+    }
+}
+
+function mapping(obj, funcIndex, funcMap, options, path, context) {
     path = path || []
     if (_.isFunction(obj)) {
         const id = uuid.v4()
-        if (opts && opts.clear) {
-            opts.clear.push(id)
-        }
-        funcMap[id] = (function (context) {
-            return function () {
-                const rpc = _.extend({}, opts, {clear: false})
-                const args = 1 <= arguments.length ? slice.call(arguments, 0) : []
-                const result = obj.apply(context, [rpc].concat(args))
-                if (rpc.clear) {
-                    const clear = opts.clear
-                    if (clear) {
-                        for (let index in clear) {
-                            delete funcMap[clear[index]]
-                        }
-                    }
-                } else {
-                    if (rpc.release) {
-                        delete funcMap[id]
-                    }
-                }
-                return result
+        if (!options.autoRelease && options.id) {
+            if (options.disposed || funcMap[options.id] === false) {
+                return 0
             }
-        })(context)
+            (funcMap[options.id] = funcMap[options.id] || []).push(id)
+        }
+        funcMap[id] = function () {
+            const deferred = Q.defer()
+            const args = 1 <= arguments.length ? slice.call(arguments, 0) : []
+            try {
+                deferred.resolve(obj.apply(context, args))
+                if (options.autoRelease) {
+                    delete funcMap[id]
+                }
+            } catch (error) {
+                deferred.reject({message: error.message})
+                if (options.autoRelease) {
+                    funcIndex = clear(funcIndex, funcMap)
+                    delete funcMap[id]
+                }
+            }
+            return deferred.promise
+        }
         funcIndex.push(path.concat([id]))
         return 0
     } else if (_.isArray(obj)) {
         const val = []
         for (let i = 0, len = obj.length; i < len; i++) {
             path.push(i)
-            val.push(mapping(obj[i], funcIndex, funcMap, opts, path))
+            val.push(mapping(obj[i], funcIndex, funcMap, options, path))
             path.pop()
         }
         return val
@@ -46,7 +65,7 @@ function mapping(obj, funcIndex, funcMap, opts, path, context) {
         const val = {}
         for (let k in obj) {
             path.push(k)
-            val[k] = mapping(obj[k], funcIndex, funcMap, opts, path, obj)
+            val[k] = mapping(obj[k], funcIndex, funcMap, options, path, obj)
             path.pop()
         }
         return val
@@ -55,7 +74,7 @@ function mapping(obj, funcIndex, funcMap, opts, path, context) {
     }
 }
 
-function proxy(ws, obj, funcIndex, funcMap) {
+function proxy(ws, obj, funcIndex, funcMap, options) {
     var method, o, v
     for (let i = 0, m = funcIndex.length; i < m; i++) {
         v = funcIndex[i]
@@ -66,39 +85,59 @@ function proxy(ws, obj, funcIndex, funcMap) {
         method = v[v.length - 1]
         o[v[v.length - 2]] = (function (method) {
             return function () {
-                const args = 1 <= arguments.length ? slice.call(arguments, 0) : []
                 const deferred = Q.defer()
-                let funcIndex = []
+                const args = 1 <= arguments.length ? slice.call(arguments, 0) : []
                 const id = uuid.v4()
-                ws.emit('rpc-call', {
-                    id: id,
-                    method: method,
-                    args: mapping(args, funcIndex, funcMap, {release: true, clear: []}),
-                    funcIndex: funcIndex
-                })
-                const timer = setTimeout(function () {
-                    ws.removeListener('rpc-return', callback)
-                    deferred.reject()
-                }, 5000)
-                const callback = function (res) {
-                    if (res.id === id) {
-                        clearTimeout(timer)
+                const config = _.extend({
+                    timeout: 5000,
+                    autoRelease: true,
+                    id
+                }, options)
+                let funcIndex = []
+                setTimeout(function () {
+                    const timer = setTimeout(function () {
                         ws.removeListener('rpc-return', callback)
-                        if (res.error) {
-                            deferred.reject(res.error)
-                        } else {
-                            deferred.resolve(res.result)
+                        deferred.reject({message: 'timeout'})
+                    }, config.timeout)
+                    const callback = function (res) {
+                        if (res.id === id) {
+                            clearTimeout(timer)
+                            ws.removeListener('rpc-return', callback)
+                            if (res.error) {
+                                deferred.reject(res.error)
+                                if (config.autoRelease) {
+                                    funcIndex = clear(funcIndex, funcMap)
+                                    delete funcMap[method]
+                                }
+                            } else {
+                                deferred.resolve(res.result)
+                                if (config.autoRelease) {
+                                    delete funcMap[method]
+                                }
+                            }
                         }
                     }
-                }
-                ws.on('rpc-return', callback)
-                const promise = deferred.promise
-                promise.fail(function () {
-                    for (let index in funcIndex) {
-                        let key = funcIndex[index]
-                        delete funcMap[key[key.length - 1]]
+                    ws.emit('rpc-call', {
+                        id: id,
+                        method: method,
+                        args: mapping(args, funcIndex, funcMap, config),
+                        funcIndex: funcIndex,
+                        options: config
+                    })
+                    ws.on('rpc-return', callback)
+                }, 0)
+                const promise = _.extend(deferred.promise, {
+                    config: function (conf) {
+                        _.extend(config, conf)
+                        return promise
+                    },
+                    end: function () {
+                        if (!config.autoRelease) {
+                            config.disposed = true
+                            release(id, funcMap)
+                            ws.emit('rpc-release', {id})    
+                        }
                     }
-                    funcIndex = undefined
                 })
                 return promise
             }
@@ -107,28 +146,35 @@ function proxy(ws, obj, funcIndex, funcMap) {
     return obj
 }
 
-function mkRpcCallCallback(ws, funcMap) {
+function rpcCallCallbackFactory(ws, funcMap) {
     return function (req) {
         const func = funcMap[req.method]
         if (func) {
-            try {
-                const result = func.apply(null, proxy(ws, req.args, req.funcIndex, funcMap))
-                ws.emit('rpc-return', {
-                    id: req.id,
-                    result: result
+            func.apply(null, proxy(ws, req.args, req.funcIndex, funcMap, req.options))
+                .then(function (result) {
+                    ws.emit('rpc-return', {
+                        id: req.id,
+                        result: result
+                    })
                 })
-            } catch (e) {
-                ws.emit('rpc-return', {
-                    id: req.id,
-                    error: e
+                .fail(function (error) {
+                    ws.emit('rpc-return', {
+                        id: req.id,
+                        error: error
+                    })
                 })
-            }
         } else {
             ws.emit('rpc-return', {
                 id: req.id,
-                error: 'function not found'
+                error: {message: 'function not found'}
             })
         }
+    }
+}
+
+function rpcReleaseCallbackFactory(funcMap) {
+    return function (req) {
+        release(req.id, funcMap)
     }
 }
 
@@ -146,18 +192,19 @@ export default {
                 const constructor = localConstructors[req.name]
                 if (constructor) {
                     const local = constructor(proxy(socket, req.client, req.funcIndex, funcMap))
-                    socket.on('rpc-call', mkRpcCallCallback(socket, funcMap))
+                    socket.on('rpc-call', rpcCallCallbackFactory(socket, funcMap))
+                    socket.on('rpc-release', rpcReleaseCallbackFactory(funcMap))
                     socket.emit('rpc-connect', {
                         id: req.id,
                         name: req.name,
-                        remote: mapping(local, funcIndex, funcMap),
+                        remote: mapping(local, funcIndex, funcMap, req.options),
                         funcIndex: funcIndex
                     })
                 } else {
                     socket.emit('rpc-connect', {
                         id: req.id,
                         name: req.name,
-                        error: 'object not found'
+                        error: {message: 'object not found'}
                     })
                 }
 
@@ -171,27 +218,34 @@ export default {
         this.ws = ws
         return this
     },
-    connect: function (name, local) {
+    connect: function (name, local, options) {
+        options = _.extend({
+            timeout: 5000,
+            autoRelease: false
+        }, options)
         const deferred = Q.defer()
         const ws = this.ws
         let funcIndex = []
         let funcMap = {}
+
         function release() {
             clearTimeout(timer)
             ws.removeListener('rpc-connect', rpcConnectCallback)
             funcMap = undefined
             funcIndex = undefined
         }
+
         const timer = setTimeout(function () {
             release()
-            deferred.reject('timeout')
-        }, 5000)
+            deferred.reject({message: 'timeout'})
+        }, options.timeout)
         const id = uuid.v4()
         ws.emit('rpc-connect', {
             id: id,
             name: name,
-            client: mapping(local, funcIndex, funcMap),
-            funcIndex: funcIndex
+            client: mapping(local, funcIndex, funcMap, options),
+            funcIndex: funcIndex,
+            options
         })
         const rpcConnectCallback = function (res) {
             if (res.id === id) {
@@ -201,18 +255,24 @@ export default {
                 } else {
                     clearTimeout(timer)
                     ws.removeListener('rpc-connect', rpcConnectCallback)
-                    ws.on('rpc-call', mkRpcCallCallback(ws, funcMap))
+                    ws.on('rpc-call', rpcCallCallbackFactory(ws, funcMap))
+                    ws.on('rpc-release', rpcReleaseCallbackFactory(funcMap))
                     deferred.resolve(proxy(ws, res.remote, res.funcIndex, funcMap))
                 }
             }
         }
         ws.on('rpc-connect', rpcConnectCallback)
-        return deferred.promise
+        return _.extend(deferred.promise, {
+            check () {
+                console.log(funcMap)
+            }
+        })
     },
     destroy: function () {
         var ws
         ws = this.ws
         ws.removeListener('rpc-call')
+        ws.removeListener('rpc-release')
         ws.removeListener('rpc-return')
         delete this.ws
     }
