@@ -14,22 +14,57 @@
         })
         rpc4js.bind(ws)
         ws.connect()
-        rpc4js.connect('test', {
+        var r = rpc4js.connect('test', {
             A: 'A',
-            FUNC: function (rpc, msg) {
+            FUNC: function (msg) {
+                console.log(msg)
+            },
+            TEST: function (msg) {
                 console.log(msg)
             }
-        }).then(function (remote) {
-            console.log(remote.a)
-            remote.func('hello server!')
-            remote.func_with_callback(function (rpc, cb002) {
-                cb002(function (rpc, msg) {
-                    console.log('@@@@@@@@@@++++++' + msg)
+        })
+        r.then(function (remote) {
+            console.log('remote.a = ' + remote.a)
+
+
+            remote.func('1st call func')
+
+            remote.func('2nd call func')
+
+            var m = remote.func('3th call func', function () {
+                // this a useless function, can not auto release
+            }).config({
+                autoRelease: false
+            })
+            m.then(function (result) {
+                console.log('call func ok: ' + result)
+                m.end()
+            })
+
+            remote.func('error').fail(function (error) {
+                console.log('call func error: ' + error.message)
+            })
+
+            var rpc = remote.func_with_callback(function (cb002) {
+                cb002(function (msg) {
+                    console.log('1st inner callback: ' + msg)
                 })
-                // rpc.release = false
-                // rpc.clear = true
-            }, function (rpc, msg) {
-                console.log('+++' + msg)
+                cb002(function (msg) {
+                    console.log('2nd inner callback: ' + msg)
+                }).fail(function (error) {
+                    console.log(error.message);
+                })
+                cb002(function (msg) {
+                    console.log('3th inner callback: ' + msg)
+                    rpc.end()
+                }).fail(function (error) {
+                    console.log(error.message);
+                })
+            }, function (msg) {
+                console.log('callback2: ' + msg)
+            }).config({
+                autoRelease: false,
+                timeout: 2000
             })
         })
     </script>

@@ -11,16 +11,21 @@ rpc4js
     .define('test', function (client) {
         return {
             a: 'a',
-            func: function (rpc, msg) {
+            func: function (msg) {
+                console.log(this.a)
                 console.log(msg)
                 client.FUNC('echo ' + msg)
+                if (msg === 'error') {
+                    throw new Error('this is a err test')
+                }
+                return msg
             },
-            func_with_callback: function (rpc, cb001, f2) {
-                cb001(function (rpc, cb003) {
-                    cb003('11111111111')
+            func_with_callback: function (cb001, f2) {
+                cb001(function (cb003) {
+                    cb003('this is a msg from inner callback.')
                 })
-                f2('>>>>>>>>>>').fail(function (error) {
-                    console.log('error: ' + error)
+                f2('this is a msg from server.').fail(function (res) {
+                    console.log('error: ' + res.error.message)
                 })
             }
         }
