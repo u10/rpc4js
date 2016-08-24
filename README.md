@@ -73,7 +73,7 @@ npm install u10/rpc4js
             return {
                 prop: 'prop',
                 func: function (msg) {
-                    console.log(this.PROP)
+                    console.log(client.PROP)
                     client.FUNC('echo ' + msg)
                 },
                 func_with_callback: function (callback) {
